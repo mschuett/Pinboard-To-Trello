@@ -1,13 +1,11 @@
+#!/usr/bin/python3
 import sys
 import json
-import requests
 import os
 import logging
 import itertools
 from logging.handlers import RotatingFileHandler
-from pocket import Pocket
-from datetime import datetime
-from bs4 import BeautifulSoup
+from pinboard import pinboard
 from trello import TrelloClient
 
 
@@ -32,11 +30,9 @@ with open(CONFIG_FILE_NAME, 'r') as conf_file:
     conf_data = json.load(conf_file)
 auth_data = conf_data[AUTH_DATA_KEY]
 
-# Logging in to Pocket
-pocket_consumer_key = conf_data[AUTH_DATA_KEY]['pocket_consumer_key']
-pocket_client = Pocket(conf_data[AUTH_DATA_KEY]['pocket_consumer_key'],
-                       conf_data[AUTH_DATA_KEY]['pocket_user_credentials']['access_token'])
-logger.info('Logged in to Pocket')
+# Logging in to Pinboard
+pb = pinboard.Pinboard(conf_data[AUTH_DATA_KEY]['pinboard_api_token'])
+logger.info('Logged in to Pinboard')
 
 # Logging in to Trello
 trello_client = TrelloClient(
@@ -56,47 +52,33 @@ trello_label_color_generator = itertools.cycle([
     "green", "yellow", "orange", "red", "purple",
     "blue", "sky", "lime", "pink", "black"])
 
+pb_tag = conf_data['pinboard_tag']
+new_pb_items = pb.posts.all(tag=[pb_tag])
+logger.info('Fetched new Pinboard items')
 
-now_timestamp = int(datetime.now().timestamp())
-pocket_tag = conf_data['pocket_tag'] if 'pocket_tag' in conf_data else None
-pocket_state = conf_data['pocket_state'] if 'pocket_state' in conf_data else 'all'
-
-new_pocket_items, _ = pocket_client.get(state=pocket_state, detailType='complete', tag=pocket_tag)
-logger.info('Fetched new Pocket items')
-
-if len(new_pocket_items['list']) == 0:
+if len(new_pb_items) == 0:
     logger.info('No new items.')
     sys.exit(0)
 
-for pocket_item_id, pocket_item_data in new_pocket_items['list'].items():
-    if pocket_item_data['status'] == '0':
-        page_url = pocket_item_data['given_url']
-        logger.info(f'Found item {page_url}')
+for pb_item in new_pb_items:
+        logger.debug(f"""Found item with
+            url: {pb_item.url},
+            description: {pb_item.description},
+            extended: {pb_item.extended},
+            tags: {pb_item.tags},
+            time: {pb_item.time},
+            """)
 
-        # Getting page title
-        if page_url.endswith('.pdf'):
-            page_title = page_url.split('/')[-1].split('.')[0]
-        else:
-            try:
-                with requests.get(page_url) as page_response:
-                    parsed_page = BeautifulSoup(page_response.text, 'html.parser')
-                page_title = parsed_page.title.text
-            except:
-                page_title = page_url
+        card = trello_list.add_card(name=pb_item.description,
+                                    desc=pb_item.extended)
+        logger.info(f'Created card \'{pb_item.description}\')')
 
-        card = trello_list.add_card(name=page_title,
-                                    desc=pocket_item_data['excerpt'])
-        logger.info(f'Created card \'{page_title}\'')
-        pocket_item_url = f'https://getpocket.com/a/read/{pocket_item_id}'
-        card.attach(url=page_url)
-        logger.info(f'Attached link {page_url} to item')
-        if pocket_item_data['has_image'] == '1':
-            pocket_item_image_url = pocket_item_data['image']['src']
-            card.attach(url=pocket_item_image_url)
-            logger.info(f'Attached img {pocket_item_image_url} to item')
-        for tag in pocket_item_data["tags"].keys():
+        card.attach(url=pb_item.url)
+        logger.info(f'Attached link {pb_item.url} to item')
+
+        for tag in pb_item.tags:
             # ignore marker tag
-            if pocket_tag and tag == pocket_tag:
+            if pb_tag and tag == pb_tag:
                 continue
             # create new label
             if tag not in trello_labels:
@@ -105,10 +87,9 @@ for pocket_item_id, pocket_item_data in new_pocket_items['list'].items():
                 trello_labels[tag] = label
             card.add_label(trello_labels[tag])
 
-        pocket_client.archive(pocket_item_id).commit()
-        logger.info(f'Archived item {page_url}')
+        pb.posts.delete(url=pb_item.url)
+        logger.info('Deleted Pinboard item %s', pb_item.url)
 
-
-conf_data['pocket_last_checked'] = now_timestamp
+conf_data['pinboard_last_checked'] = now_timestamp
 with open(CONFIG_FILE_NAME, 'w') as conf_file:
     json.dump(conf_data, conf_file, indent=2)
