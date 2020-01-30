@@ -103,7 +103,3 @@ for pb_item in new_pb_items:
 
     pb.posts.delete(url=pb_item.url)
     logger.info("Deleted Pinboard item %s", pb_item.url)
-
-conf_data["pinboard_last_checked"] = now_timestamp
-with open(CONFIG_FILE_NAME, "w") as conf_file:
-    json.dump(conf_data, conf_file, indent=2)
